@@ -15,9 +15,10 @@
 init_car_count = 0 # Initial number of cars in garage
 Ops241A_object_max_speed = 20 # max speed in mph that a car can travel in order to be tracked; anything faster is not a car
 Ops241A_object_min_speed = 4 # min speed in mph that a car can travel in order to be tracked; anything slower is not a car
-idle_speed_wait_time = 3.0  # time in secs waiting to receive an initial car speed data from OPS241A sensor before printing heartbeat message
-tracking_speed_wait_time = 2.0 # time in secs waiting for next car speed data from OPS241 sensor when already tracking a car
-min_car_tracking_time = 1.0 # min time in secs that car needs to be tracked for it to be counted
+idle_speed_wait_time = 3.0  # time in h,m,s waiting to receive an initial car speed data from OPS241A sensor before printing heartbeat message
+tracking_speed_wait_time = 2.0 # time in h,m,s waiting for next car speed data from OPS241 sensor when already tracking a car
+min_car_tracking_time = 1.0 # min time in h,m,s that car needs to be tracked for it to be counted
+wifi_wait_time = 1.0 # time in secs to wait for wifi to connect for MQTT Cayenne
 
 # Ops241A module setting
 Ops241A_Speed_Output_Units = 'US'  # mph
@@ -26,6 +27,9 @@ Ops241A_Sampling_Frequency = 'S2'  # 20Ksps
 Ops241A_Transmit_Power = 'P7'      # max power
 Ops241A_Threshold_Control = 'QX'   # squelch -100
 Ops241A_Data_Accuracy = 'F5'       # 5 decimal reporting
+Ops241A_Debug_mode1 = 'Dr'         # Turn Red LED off
+Ops241A_Debug_mode2 = 'Dy'         # Turn Yellow LED off
+Ops241A_RGB_LED_Lighting_Control = '^0'   # Turn all LEDs off
 Ops241A_Module_Information = '??'
 
 #MQTT settings
@@ -39,7 +43,9 @@ clientid = "47de3df0-d349-11e7-a824-91d417d3812a"
 # Import time, decimal, serial, reg expr, sys
 import os
 import sys
-from time import *
+import time
+import datetime
+# from time import *
 from decimal import *
 import serial
 import re
@@ -60,33 +66,36 @@ ser.flushInput()
 ser.flushOutput()
 
 # sendSerialCommand: function for sending commands to the OPS-241A module
-def sendSerCmd(descrStr, commandStr) :
+def sendSerCmd(descrStr, commandStr, VerifyBool) :
     data_for_send_str = commandStr
     data_for_send_bytes = str.encode(data_for_send_str)
     print(descrStr, commandStr)
     ser.write(data_for_send_bytes)
-    # Initialize message verify checking
+    # Initialize message verify
     ser_message_start = '{'
-    ser_write_verify = False
-    # Print out module response to command string
-    while not ser_write_verify :
+    ser_write_verify = VerifyBool
+    # Print out module response to command string if VerifyBool is True
+    while ser_write_verify :
         data_rx_bytes = ser.readline()
         data_rx_length = len(data_rx_bytes)
         if (data_rx_length != 0) :
             data_rx_str = str(data_rx_bytes)
             if data_rx_str.find(ser_message_start) :
                 print(data_rx_str)
-                ser_write_verify = True
+                ser_write_verify = False
             
-# Initialize and query Ops241A Module
+# Initialize Ops241A Module and verify if True
 print("\nInitializing Ops241A Module")
-sendSerCmd("\nSet Speed Output Units: ", Ops241A_Speed_Output_Units)
-sendSerCmd("\nSet Direction Control: ", Ops241A_Direction_Control)
-sendSerCmd("\nSet Sampling Frequency: ", Ops241A_Sampling_Frequency)
-sendSerCmd("\nSet Transmit Power: ", Ops241A_Transmit_Power)
-sendSerCmd("\nSet Threshold Control: ", Ops241A_Threshold_Control)
-sendSerCmd("\nSet Data Accuracy: ", Ops241A_Data_Accuracy)
-sendSerCmd("\nModule Information: ", Ops241A_Module_Information)
+sendSerCmd("\nSet Speed Output Units: ", Ops241A_Speed_Output_Units, True)
+sendSerCmd("\nSet Direction Control: ", Ops241A_Direction_Control, True)
+sendSerCmd("\nSet Sampling Frequency: ", Ops241A_Sampling_Frequency, True)
+sendSerCmd("\nSet Transmit Power: ", Ops241A_Transmit_Power, True)
+sendSerCmd("\nSet Threshold Control: ", Ops241A_Threshold_Control, True)
+sendSerCmd("\nSet Data Accuracy: ", Ops241A_Data_Accuracy, True)
+sendSerCmd("\nSet Red LED Control: ", Ops241A_Debug_mode1, False)
+sendSerCmd("\nSet Yellow LED Control: ", Ops241A_Debug_mode2, False)
+sendSerCmd("\nSet RGB LED Lighting Control: ", Ops241A_RGB_LED_Lighting_Control, False)
+sendSerCmd("\nModule Information: ", Ops241A_Module_Information, True)
 
 ser=serial.Serial(
     port = '/dev/ttyACM0',
@@ -118,8 +127,8 @@ def getValidSpeed() :
     return validSpeed_boolean, objectSpeed_float
 
 # wait for wireless connection after boot
-print('Connecting to wifi, please wait 30s...')
-# time.sleep(1) # Sleep to allow wireless to connect before starting MQTT
+print('\nConnecting to wifi, please wait 30s...\n')
+time.sleep(wifi_wait_time) # Sleep to allow wireless to connect before starting MQTT
 
 # connect to MQTT
 # print('Connecting to MQTT, please wait...')
@@ -144,15 +153,14 @@ while not done :
         valid_tracking = False
         # Wait for valid speed
         # Initialize wait timer        
-        idle_start_time = time()
+        idle_start_time = time.time()
         idle_current_time = idle_start_time
-        idle_delta_time = 0.0
         valid_speed = False
         while not valid_speed :
             # Get speed from Ops241A   
             valid_speed, speed_float = getValidSpeed()
             if valid_speed == False :
-                idle_current_time = time()
+                idle_current_time = time.time()
                 idle_delta_time = idle_current_time - idle_start_time
                 if idle_delta_time > idle_speed_wait_time :
                     print('No car motion detected, waiting ... Car count = ', car_count)
@@ -171,14 +179,12 @@ while not done :
         tracking = True
     while tracking :
         # Initialize tracking timer
-        print('DEBUG: Init tracking')
-        tracking_start_time = time()
+        tracking_start_time = time.time()
         tracking_current_time = tracking_start_time
         tracking_delta_time = 0.0
         same_direction = True
         while not valid_tracking :
-            print('DEBUG: while not valid tracking')
-            wait_start_time = time()
+            wait_start_time = time.time()
             wait_current_time = wait_start_time
             wait_delta_time = 0.0
             valid_speed = False
@@ -187,7 +193,7 @@ while not done :
                 valid_speed, speed_float = getValidSpeed()
                 if valid_speed == False :
                     # Wait for valid speed data
-                    wait_current_time = time()
+                    wait_current_time = time.time()
                     wait_delta_time = wait_current_time - wait_start_time
                     # Check if wait timer has timed out
                     if wait_delta_time > tracking_speed_wait_time :
@@ -220,19 +226,19 @@ while not done :
                     # Save old and new speeds                      
                     oldSpeed = newSpeed
                     newSpeed = speed_float
-                    print('DEBUG: oldSpeed = ', oldSpeed, 'newSpeed = ', newSpeed)
+                    # print('DEBUG: oldSpeed = ', oldSpeed, 'newSpeed = ', newSpeed)
                     # Test if directions are the same
                     if oldSpeed * newSpeed > 0 :
                         # Direction is the same
                         same_direction = True
-                        tracking_current_time = time()
+                        tracking_current_time = time.time()
                         tracking_delta_time = tracking_current_time - tracking_start_time
                         # Check if tracking time is long enough to be valid
                         if tracking_delta_time > min_car_tracking_time :
                             valid_tracking = True
                             # Continue tracking and getting speeds until direction change or wait timeout
                         # Reset wait timer
-                        wait_start_time = time()
+                        wait_start_time = time.time()
                     else :
                         # Direction changed
                         same_direction = False
@@ -260,7 +266,7 @@ while not done :
                         valid_tracking = False
                         # Reset tracking timer
                         same_direction = True
-                        tracking_start_time = time()
+                        tracking_start_time = time.time()
                             
                                           
                             
